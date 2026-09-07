@@ -57,7 +57,7 @@ self.onmessage = (event: MessageEvent<Incoming>) => {
       note: "Generated in a worker so the UI stays responsive.",
       items,
     };
-    const text = JSON.stringify(value);
+    const text = JSON.stringify(value, null, 2);
     const { nodes, depth } = collectStats(value);
     self.postMessage({
       id: message.id,

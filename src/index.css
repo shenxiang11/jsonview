@@ -21,6 +21,7 @@ body {
   color: #f4f4f5;
 }
 
-textarea {
-  field-sizing: fixed;
+.cm-host,
+.cm-host .cm-editor {
+  height: 100%;
 }

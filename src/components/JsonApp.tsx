@@ -2,27 +2,25 @@ import {
   Braces,
   ClipboardCopy,
   Download,
-  FolderOpen,
   Moon,
   Search,
   Sun,
   Trash2,
   WandSparkles,
 } from "lucide-react";
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { generateLargeSample, parseJson, stringifyJson } from "../lib/jsonClient";
 import { formatBytes, pathLabel } from "../lib/jsonMeta";
 import { SAMPLE_JSON } from "../lib/sample";
 import { flattenTree, searchPaths } from "../lib/tree";
 import type { JsonStats, ParseError, ThemeMode, TreeRow, ViewMode } from "../lib/types";
+import { JsonEditor, type JsonEditorHandle } from "./JsonEditor";
 import { TextView } from "./TextView";
 import { TreeView } from "./TreeView";
 
-const LARGE_INPUT = 1_500_000;
-
 export function JsonApp() {
-  const [text, setText] = useState(SAMPLE_JSON);
-  const [hiddenSource, setHiddenSource] = useState(false);
+  const editorRef = useRef<JsonEditorHandle>(null);
+  const [editTick, setEditTick] = useState(0);
   const [value, setValue] = useState<unknown>(JSON.parse(SAMPLE_JSON));
   const [stats, setStats] = useState<JsonStats | null>(null);
   const [error, setError] = useState<ParseError | null>(null);
@@ -43,11 +41,10 @@ export function JsonApp() {
 
   useEffect(() => {
     const handle = window.setTimeout(() => {
-      if (hiddenSource) return;
-      void runParse(text);
+      void runParse(editorRef.current?.getText() ?? "");
     }, 180);
     return () => window.clearTimeout(handle);
-  }, [text, repair, hiddenSource]);
+  }, [editTick, repair]);
 
   const rows = useMemo(() => (value === undefined ? [] : flattenTree(value, expanded)), [value, expanded]);
 
@@ -65,13 +62,12 @@ export function JsonApp() {
     window.setTimeout(() => setToast(null), 2400);
   };
 
-  const applyParsed = (next: { value: unknown; stats: JsonStats; repaired: boolean; text?: string }, source?: string) => {
+  const applyParsed = (next: { value: unknown; stats: JsonStats; repaired: boolean; text?: string }) => {
     setValue(next.value);
     setStats(next.stats);
     setError(null);
     setExpanded(new Set(["$"]));
     setActive(null);
-    if (source !== undefined) setText(source);
     if (next.repaired) showToast("已自动修复不规范 JSON");
   };
 
@@ -98,15 +94,9 @@ export function JsonApp() {
     try {
       const source = await file.text();
       const parsed = await parseJson(source, repair);
-      if (source.length > LARGE_INPUT) {
-        setHiddenSource(true);
-        setText("");
-        applyParsed(parsed);
-        showToast(`已从文件加载 ${formatBytes(source.length)}，左侧不再塞进输入框以免卡顿`);
-      } else {
-        setHiddenSource(false);
-        applyParsed(parsed, source);
-      }
+      editorRef.current?.setText(source, { silent: true });
+      applyParsed(parsed);
+      showToast(`已加载 ${formatBytes(source.length)}`);
     } catch (caught) {
       setError(caught as ParseError);
     } finally {
@@ -182,13 +172,12 @@ export function JsonApp() {
       <div className="flex min-h-0 flex-1">
         <section className="flex min-h-0 min-w-0 flex-1 flex-col border-r border-slate-200 dark:border-zinc-800">
           <div className="flex h-10 shrink-0 items-center gap-1 overflow-x-auto border-b border-slate-200 px-2 text-xs dark:border-zinc-800">
-            <Tool onClick={() => void runParse(text)}>解析</Tool>
+            <Tool onClick={() => void runParse(editorRef.current?.getText() ?? "")}>解析</Tool>
             <Tool
               onClick={async () => {
                 if (value === undefined) return;
                 const next = await stringifyJson(value, 2);
-                setHiddenSource(false);
-                setText(next);
+                editorRef.current?.setText(next, { silent: true });
                 setPretty(next);
               }}
             >
@@ -198,8 +187,7 @@ export function JsonApp() {
               onClick={async () => {
                 if (value === undefined) return;
                 const next = await stringifyJson(value, null);
-                setHiddenSource(false);
-                setText(next);
+                editorRef.current?.setText(next, { silent: true });
                 setPretty(await stringifyJson(value, 2));
               }}
             >
@@ -207,8 +195,7 @@ export function JsonApp() {
             </Tool>
             <Tool
               onClick={() => {
-                setHiddenSource(false);
-                setText(SAMPLE_JSON);
+                editorRef.current?.setText(SAMPLE_JSON);
               }}
             >
               示例
@@ -218,8 +205,7 @@ export function JsonApp() {
                 setBusy(true);
                 try {
                   const parsed = await generateLargeSample(20000);
-                  setHiddenSource(true);
-                  setText("");
+                  editorRef.current?.setText(parsed.text ?? "", { silent: true });
                   setPretty("");
                   applyParsed(parsed);
                   showToast(`已生成 ${formatBytes(parsed.stats.bytes)} / ${parsed.stats.nodes.toLocaleString()} 节点`);
@@ -238,8 +224,7 @@ export function JsonApp() {
               type="button"
               className="ml-auto inline-flex h-7 items-center gap-1 rounded px-2 text-slate-500 hover:bg-slate-100 dark:hover:bg-zinc-800"
               onClick={() => {
-                setText("");
-                setHiddenSource(false);
+                editorRef.current?.setText("");
                 setValue(undefined);
                 setPretty("");
                 setError(null);
@@ -250,41 +235,16 @@ export function JsonApp() {
               清空
             </button>
           </div>
-          {hiddenSource ? (
-            <button
-              type="button"
-              className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 bg-slate-100 px-6 text-center text-sm text-slate-500 dark:bg-zinc-900"
-              onClick={() => document.getElementById("json-file")?.click()}
-              onDragOver={(event) => event.preventDefault()}
-              onDrop={(event) => {
-                event.preventDefault();
-                const file = event.dataTransfer.files[0];
-                if (file) void handleFile(file);
-              }}
-            >
-              <FolderOpen size={28} />
-              大文件已在 Worker 中解析，没有写进输入框。
-              <span>继续拖入 .json，或点这里重新选择</span>
-            </button>
-          ) : (
-            <textarea
-              value={text}
-              spellCheck={false}
-              placeholder="粘贴 JSON，或把文件拖进来…"
-              className="min-h-0 flex-1 resize-none border-0 bg-white p-3 font-mono text-[13px] leading-6 outline-none dark:bg-zinc-950"
-              onChange={(event) => {
-                setHiddenSource(false);
-                setPretty("");
-                setText(event.target.value);
-              }}
-              onDragOver={(event) => event.preventDefault()}
-              onDrop={(event) => {
-                event.preventDefault();
-                const file = event.dataTransfer.files[0];
-                if (file) void handleFile(file);
-              }}
-            />
-          )}
+          <JsonEditor
+            ref={editorRef}
+            theme={theme}
+            initialValue={SAMPLE_JSON}
+            onDocChange={() => {
+              setPretty("");
+              setEditTick((tick) => tick + 1);
+            }}
+            onDropFile={(file) => void handleFile(file)}
+          />
           <input
             id="json-file"
             type="file"
